@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Scripting;
 
 namespace Rosynant.EventBus
 {
+    public interface IEventBus
+    {
+        public void Reset();
+    }
+
     /// <summary>Marker interface for all event types used with <see cref="EventBus{T}"/>.</summary>
     public interface IEvent
     {
@@ -33,6 +37,13 @@ namespace Rosynant.EventBus
         /// <param name="eventSubscriptionHandle">Handle returned by <see cref="EventBus{T}.Subscribe"/>.</param>
         public void Add(IDisposable eventSubscriptionHandle)
         {
+            if (eventSubscriptionHandle == null)
+            {
+                Debug.LogWarning("[EventSubscriptionBag] Trying to Add() a eventSubscriptionHandle is null."
+                    + "EventBusProvider is probably unavailable.");
+                return;
+            }
+
             _eventSubscriptionHandles.Add(eventSubscriptionHandle);
         }
 
@@ -41,7 +52,7 @@ namespace Rosynant.EventBus
         {
             foreach (var handle in _eventSubscriptionHandles)
             {
-                handle.Dispose();
+                handle?.Dispose();
             }
 
             _eventSubscriptionHandles.Clear();
@@ -49,7 +60,11 @@ namespace Rosynant.EventBus
     }
 
     /// <summary>
-    /// Type-safe static event bus. Decouples broadcasters from listeners — neither needs a direct reference to the other.
+    /// Type-safe event bus for a single event type <typeparamref name="T"/>. Decouples broadcasters from listeners — neither needs a direct reference to the other.
+    /// <para>
+    /// Instances are created and cached per event type by <see cref="EventBusProvider"/>, which owns their lifetime —
+    /// do not instantiate <see cref="EventBus{T}"/> directly.
+    /// </para>
     /// <para>
     /// Subscribers must store the <see cref="IDisposable"/> handle returned by <see cref="Subscribe"/> and dispose it
     /// when done, typically via <see cref="EventSubscriptionBag"/> in <c>OnDestroy</c>.
@@ -60,25 +75,25 @@ namespace Rosynant.EventBus
     /// </para>
     /// </summary>
     /// <typeparam name="T">The event type. Must implement <see cref="IEvent"/>.</typeparam>
-    public static class EventBus<T> where T : IEvent
+    public class EventBus<T> : IEventBus where T : IEvent
     {
         // List preserves subscription order; HashSet would not.
-        private static readonly List<Action<T>> _listeners = new();
+        private readonly List<Action<T>> _listeners = new();
 
         // Pending queues: subscribe/unsubscribe during a broadcast is deferred here and applied
         // after iteration completes. This avoids a ToArray() snapshot allocation on every broadcast
         // at the cost of two extra lists that are empty in the common case.
-        private static readonly List<Action<T>> _delayedSubscriptions = new();
-        private static readonly List<Action<T>> _delayedUnsubscriptions = new();
+        private readonly List<Action<T>> _delayedSubscriptions = new();
+        private readonly List<Action<T>> _delayedUnsubscriptions = new();
 
-        private static bool _isBroadcasting = false;
+        private bool _isBroadcasting = false;
 
         /// <summary>
         /// Registers <paramref name="callback"/> to be invoked when an event of type <typeparamref name="T"/> is broadcast.
         /// </summary>
         /// <param name="callback">The method to invoke on broadcast.</param>
         /// <returns>A handle that unsubscribes <paramref name="callback"/> when disposed.</returns>
-        public static IDisposable Subscribe(Action<T> callback)
+        public IDisposable Subscribe(Action<T> callback)
         {
             if (_isBroadcasting)
             {
@@ -95,7 +110,7 @@ namespace Rosynant.EventBus
                 }
             }
 
-            return new EventSubscriptionHandle(callback);
+            return new EventSubscriptionHandle(callback, this);
         }
 
         /// <summary>
@@ -104,7 +119,7 @@ namespace Rosynant.EventBus
         /// Re-entrant calls during an active broadcast are ignored and logged as warnings.
         /// </summary>
         /// <param name="event">The event instance to deliver.</param>
-        public static void Broadcast(T @event)
+        public void Broadcast(T @event)
         {
             // Re-entrant broadcasts are dropped rather than queued or supported via a depth counter.
             // The assumption is that broadcasting inside a listener is always a design mistake here.
@@ -149,18 +164,17 @@ namespace Rosynant.EventBus
             }
         }
 
-        /// <summary>Clears all registered listeners. Called automatically on domain reload via <see cref="EventBusController"/>.</summary>
-        // [Preserve] guards against managed code stripping — Reset is only called via reflection
-        // in EventBusController and would otherwise appear unreferenced to the linker.
-        [Preserve]
-        public static void Reset()
+        /// <summary>
+        /// Clears all registered listeners.
+        /// </summary>
+        public void Reset()
         {
             _listeners.Clear();
             _delayedSubscriptions.Clear();
             _delayedUnsubscriptions.Clear();
         }
 
-        private static void Unsubscribe(Action<T> callback)
+        internal void Unsubscribe(Action<T> callback)
         {
             if (_isBroadcasting)
             {
@@ -182,13 +196,15 @@ namespace Rosynant.EventBus
         private sealed class EventSubscriptionHandle : IDisposable
         {
             private readonly Action<T> _callback;
+            private readonly EventBus<T> _eventBus;
 
-            internal EventSubscriptionHandle(Action<T> callback)
+            internal EventSubscriptionHandle(Action<T> callback, EventBus<T> eventBus)
             {
                 _callback = callback;
+                _eventBus = eventBus;
             }
 
-            public void Dispose() => Unsubscribe(_callback);
+            public void Dispose() => _eventBus.Unsubscribe(_callback);
         }
     }
 }

@@ -1,5 +1,8 @@
 ﻿<Solution>
-  <Project Path="Rosynant.EventBus.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="Rosynant.EventBus.csproj" />
+  <Project Path="Rosynant.EventBus.Tests.PlayMode.csproj" />
+  <Project Path="NewAssembly.csproj" />
   <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="Rosynant.EventBus.Tests.EditMode.csproj" />
 </Solution>
